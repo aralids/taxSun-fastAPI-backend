@@ -1,6 +1,6 @@
-from app.core.config import rankPatternFull
-from app.utils.parsing import calc_raw_tax_set, calc_tax_set
-from app.utils.sorting import sort_n_uniquify, correct_tot_counts, sort_evalues
+from app.core.config import ALLOWED_RANKS
+from app.utils.parsing import build_raw_taxon_index, build_rank_filtered_taxon_set
+from app.utils.sorting import dedupe_and_sort_lineages, propagate_counts_and_build_children, sort_hits_by_evalue
 
 async def process_tsv_dataset(file):
     file = await file.read()
@@ -8,18 +8,17 @@ async def process_tsv_dataset(file):
     header_line = file_lines[0]
     lines = file_lines[1:]
     
-    raw_tax_set, raw_lns, e_value_enabled, fasta_enabled = calc_raw_tax_set(header_line, lines)
-    print("size: ", len(lines))
+    raw_tax_set, raw_lns, e_value_enabled, fasta_enabled = build_raw_taxon_index(header_line, lines)
     id_lst = []
     for obj in raw_tax_set.values():
         if not (obj["taxID"] in id_lst):
             id_lst += [obj["taxID"]]
-    tax_set, lns = calc_tax_set(raw_tax_set, raw_lns, e_value_enabled, fasta_enabled)
-    lns = sort_n_uniquify(lns)
-    tax_set = correct_tot_counts(lns, tax_set)
-    tax_set = sort_evalues(tax_set)
+    tax_set, lns = build_rank_filtered_taxon_set(raw_tax_set, raw_lns, e_value_enabled, fasta_enabled)
+    lns = dedupe_and_sort_lineages(lns)
+    tax_set = propagate_counts_and_build_children(lns, tax_set)
+    tax_set = sort_hits_by_evalue(tax_set)
 
-    return {"lns": lns, "taxSet": tax_set, "eValueEnabled": e_value_enabled, "fastaEnabled": fasta_enabled, "rankPatternFull": rankPatternFull}
+    return {"lns": lns, "taxSet": tax_set, "eValueEnabled": e_value_enabled, "fastaEnabled": fasta_enabled, "rankPatternFull": ALLOWED_RANKS}
 
 async def process_faa_dataset(file):
     file = await file.read()

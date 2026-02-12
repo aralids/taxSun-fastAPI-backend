@@ -1,191 +1,262 @@
-import copy, taxopy
-from app.core.config import rankPatternFull
+from __future__ import annotations
+
+import copy
+from typing import Any, Dict, List, Tuple
+
+import taxopy
+
+from app.core.config import ALLOWED_RANKS
 from app.core.taxdb import get_taxdb
 
-def calc_raw_tax_set(header_line, lines):
+
+TaxonKey = str
+Lineage = List[List[str]]  # list of [rank, name] pairs
+TaxonEntry = Dict[str, Any]
+TaxonSet = Dict[TaxonKey, TaxonEntry]
+
+
+def build_raw_taxon_index(
+    header_line: str,
+    lines: List[str],
+) -> Tuple[TaxonSet, List[Lineage], bool, bool]:
+    """
+    Parse TSV-like input lines and build a raw taxon index.
+
+    Expected columns per line:
+      0: gene_name (string)
+      1: taxID (string; "NA" or "" will be mapped to root)
+      2: e-value (optional)
+      3: fasta header (optional)
+
+    Returns:
+      raw_taxa:
+        A dict keyed by "<name> <rank>" with rawCounts/totCounts and collected metadata.
+      raw_lineages:
+        A list of full taxonomic paths (each path is [ [rank,name], ... ]) for each *new* taxID encountered.
+      has_evalues:
+        Whether the input appears to include e-values.
+      has_fasta_headers:
+        Whether the input appears to include fasta headers.
+    """
     taxdb = get_taxdb()
-    raw_tax_set = {"root root": {"taxID": "1", 
-                                "rawCount": 0, 
-                                "totCount": 0, 
-                                "name": "root",
-                                "rank": "root",  
-                                "lnIndex": 0,
-                                "names": [], 
-                                "geneNames": [], 
-                                "eValues": [], 
-                                "fastaHeaders": [], 
-                                "children": [],
-                                "directChildren": []}}
-    id_set = {"1": "root root"}
-    id_sum = 0
-    raw_lns = [[["root", "root"]]]
 
-    e_value_enabled = False
-    if "value" in header_line.lower():
-        e_value_enabled = True
+    has_evalues = "value" in header_line.lower()
+    has_fasta_headers = "fasta" in header_line.lower()
 
-    fasta_enabled = False
-    if "fasta" in header_line.lower():
-        fasta_enabled = True
-    
+    # We key nodes by "name rank" everywhere in your pipeline.
+    root_key = "root root"
+    raw_taxa: TaxonSet = {
+        root_key: {
+            "taxID": "1",
+            "rawCount": 0,
+            "totCount": 0,
+            "name": "root",
+            "rank": "root",
+            "lnIndex": 0,
+            "names": [],
+            "geneNames": [],
+            "eValues": [],
+            "fastaHeaders": [],
+            "children": [],
+            "directChildren": [],
+        }
+    }
+
+    # Map taxID -> "<name> <rank>" key to avoid re-creating nodes.
+    taxid_to_key: Dict[str, TaxonKey] = {"1": root_key}
+
+    # Store lineages only for newly discovered taxIDs (your later step uses this list).
+    raw_lineages: List[Lineage] = [[["root", "root"]]]
 
     for line in lines:
-        line2list = line.split("\t")
-        line2list = [item.replace("\r","") for item in line2list]
-        gene_name = line2list[0]
-        taxID = line2list[1]
+        cols = [c.replace("\r", "") for c in line.split("\t")]
 
-        if len(line2list) >= 3:
-            e_value = line2list[2]
+        gene_name = cols[0] if len(cols) > 0 else ""
+        tax_id = cols[1] if len(cols) > 1 else "1"
 
-        if len(line2list) >= 4:
-            fasta_header = line2list[3]
+        e_value = cols[2] if len(cols) > 2 else ""
+        fasta_header = cols[3] if len(cols) > 3 else ""
 
-        if taxID == "NA" or taxID == "":
-            taxID = "1"
+        if tax_id in ("NA", ""):
+            tax_id = "1"
 
-        if not (taxID in id_set):
-            id_sum += int(taxID)
-            taxon = taxopy.Taxon(int(taxID), taxdb)
+        # New taxon
+        if tax_id not in taxid_to_key:
+            taxon = taxopy.Taxon(int(tax_id), taxdb)
             name = taxon.name
             rank = taxon.rank
-            lineageNamesList = taxon.rank_name_dictionary
-            dictlist = [["root", "root"]] + [[k,v] for k,v in lineageNamesList.items()][::-1]
-            if not (dictlist[-1][0] == rank and dictlist[-1][1] == name):
-                dictlist += [[rank, name]]
-            raw_tax_set[name + " " + rank] = {"taxID": taxID, 
-                                              "rawCount": 1, 
-                                              "name": name,
-                                              "rank": rank, 
-                                              "totCount": 1, 
-                                              "names": [name + " " + rank], 
-                                              "geneNames": [gene_name], 
-                                              "children": [],
-                                              "directChildren": []}
-            
-            if len(line2list) >= 3:
-                if e_value != "":
-                    raw_tax_set[name + " " + rank]["eValues"] = [float(e_value)]
+            key = f"{name} {rank}"
+
+            # taxopy provides rank->name; we convert to [rank,name] pairs and reverse to get root->... order.
+            lineage_rank_name = taxon.rank_name_dictionary
+            rank_name_path: Lineage = [["root", "root"]] + [[k, v] for k, v in lineage_rank_name.items()][::-1]
+
+            # Ensure leaf is included
+            if not (rank_name_path[-1][0] == rank and rank_name_path[-1][1] == name):
+                rank_name_path.append([rank, name])
+
+            raw_taxa[key] = {
+                "taxID": tax_id,
+                "rawCount": 1,
+                "totCount": 1,
+                "name": name,
+                "rank": rank,
+                "names": [key],
+                "geneNames": [gene_name],
+                "children": [],
+                "directChildren": [],
+            }
+
+            if has_evalues:
+                raw_taxa[key]["eValues"] = [float(e_value)] if e_value != "" else [1.0]
+
+            if has_fasta_headers:
+                raw_taxa[key]["fastaHeaders"] = [fasta_header] if fasta_header != "" else [None]
+
+            taxid_to_key[tax_id] = key
+            raw_lineages.append(rank_name_path)
+            continue
+
+        # Existing taxon
+        key = taxid_to_key[tax_id]
+        raw_taxa[key]["totCount"] += 1
+        raw_taxa[key]["rawCount"] += 1
+        raw_taxa[key]["geneNames"].append(gene_name)
+        raw_taxa[key]["names"].append(key)
+
+        if has_evalues:
+            raw_taxa[key]["eValues"].append(float(e_value) if e_value != "" else 1.0)
+
+        if has_fasta_headers:
+            raw_taxa[key]["fastaHeaders"].append(fasta_header if fasta_header != "" else None)
+
+    return raw_taxa, raw_lineages, has_evalues, has_fasta_headers
+
+
+def build_rank_filtered_taxon_set(
+    raw_taxa: TaxonSet,
+    raw_lineages: List[Lineage],
+    has_evalues: bool,
+    has_fasta_headers: bool,
+) -> Tuple[TaxonSet, List[Lineage]]:
+    """
+    Build a taxon set filtered to `rankPatternFull` (allowed ranks), while *inheriting* counts upward.
+
+    Core idea:
+      - Some lineages include ranks you don't want to display.
+      - The "leaf" (original hit taxon) may be at a filtered-out rank.
+      - We propagate that leaf's counts + metadata upward until we hit the next kept rank.
+      - We also prune those filtered ranks from the lineage paths.
+
+    Returns:
+      tax_set: dict of taxa restricted to allowed ranks (existing + created intermediate nodes).
+      filtered_lineages: lineage paths with filtered-out ranks removed.
+    """
+    allowed_ranks = ALLOWED_RANKS
+
+    existing_taxa: TaxonSet = {}
+    created_taxa: TaxonSet = {}
+    dropped_taxa: TaxonSet = {}
+
+    filtered_lineages = copy.deepcopy(raw_lineages)
+
+    # Iterate lineages from bottom-up to propagate leaf info upward.
+    for i in reversed(range(len(raw_lineages))):
+        lineage = raw_lineages[i]
+
+        inherited_key: str = ""
+        inherited_count: int = 0
+        inherited_gene_names: List[str] = []
+        inherited_evalues: List[float] = []
+        inherited_fasta_headers: List[str | None] = []
+
+        for j in reversed(range(len(lineage))):
+            rank, name = lineage[j][0], lineage[j][1]
+            key = f"{name} {rank}"
+
+            if rank in allowed_ranks:
+                # If node exists in raw_taxa, copy it once into existing_taxa.
+                if key in raw_taxa:
+                    if key not in existing_taxa:
+                        existing_taxa[key] = raw_taxa[key]
+                        existing_taxa[key]["unaCount"] = raw_taxa[key]["rawCount"]
+
+                    # Push inherited counts/metadata into this kept rank node.
+                    if inherited_count > 0:
+                        existing_taxa[key]["unaCount"] += inherited_count
+                        existing_taxa[key]["totCount"] += inherited_count
+                        existing_taxa[key]["geneNames"] += inherited_gene_names
+                        existing_taxa[key]["names"] += [inherited_key] * inherited_count
+
+                        if has_evalues:
+                            existing_taxa[key]["eValues"] += inherited_evalues
+                            inherited_evalues = []
+
+                        if has_fasta_headers:
+                            existing_taxa[key]["fastaHeaders"] += inherited_fasta_headers
+                            inherited_fasta_headers = []
+
+                        inherited_key = ""
+                        inherited_gene_names = []
+                        inherited_count = 0
+
+                # Node does not exist in raw_taxa → create it if needed (intermediate kept rank).
                 else:
-                    raw_tax_set[name + " " + rank]["eValues"] = [1]
-
-            if len(line2list) >= 4:    
-                if fasta_header != "":
-                    raw_tax_set[name + " " + rank]["fastaHeaders"] = [fasta_header]
-                else:
-                    raw_tax_set[name + " " + rank]["fastaHeaders"] = [None]
-
-            id_set[taxID] = name + " " + rank
-            raw_lns.append(dictlist)
-        else:
-            raw_tax_set[id_set[taxID]]["totCount"] += 1
-            raw_tax_set[id_set[taxID]]["rawCount"] += 1
-            raw_tax_set[id_set[taxID]]["geneNames"].append(gene_name)
-            raw_tax_set[id_set[taxID]]["names"] += [id_set[taxID]]
-
-            if len(line2list) >= 3:
-                if e_value != "":
-                    raw_tax_set[id_set[taxID]]["eValues"].append(float(e_value))
-                else:
-                    raw_tax_set[id_set[taxID]]["eValues"].append(1)
-
-            if len(line2list) >= 4:
-                if fasta_header != "":
-                    raw_tax_set[id_set[taxID]]["fastaHeaders"].append(fasta_header)
-                else:
-                    raw_tax_set[id_set[taxID]]["fastaHeaders"].append(None)
-    return raw_tax_set, raw_lns, e_value_enabled, fasta_enabled
-
-def calc_tax_set(raw_tax_set, raw_lns, e_value_enabled, fasta_enabled):
-    existent = {}
-    deleted ={}
-    created = {}
-    lns = copy.deepcopy(raw_lns)
-
-    for i in reversed(range(0, len(raw_lns))):
-        ln = raw_lns[i]
-
-        inherited_taxon = ""
-        inherited_unaCount = 0
-        inherited_geneNames = []
-
-        if e_value_enabled:
-            inherited_eValues = []
-        if fasta_enabled:
-            inherited_fastaHeaders = []
-
-        for j in reversed(range(0, len(ln))):
-            name = ln[j][1]
-            rank = ln[j][0]
-            taxon = name + " " + rank
-
-            if rank in rankPatternFull:
-                if taxon in raw_tax_set:
-                    if not (taxon in existent):
-                        existent[taxon] = raw_tax_set[taxon]
-                        existent[taxon]["unaCount"] = raw_tax_set[taxon]["rawCount"]
-                    if inherited_unaCount > 0:
-                        existent[taxon]["unaCount"] += inherited_unaCount
-                        existent[taxon]["totCount"] += inherited_unaCount
-                        existent[taxon]["geneNames"] += inherited_geneNames
-                        existent[taxon]["names"] += [inherited_taxon] * inherited_unaCount
-                        if e_value_enabled:
-                            existent[taxon]["eValues"] += inherited_eValues
-                            inherited_eValues = []
-                        if fasta_enabled:
-                            existent[taxon]["fastaHeaders"] += inherited_fastaHeaders
-                            inherited_fastaHeaders = []
-                        inherited_taxon = ""
-                        inherited_geneNames = []
-                        inherited_unaCount = 0
-                else:
-                    if not (taxon in created):
-                        created[taxon] = {"taxID": "", 
-                                          "children": [],
-                                          "directChildren": [],
-                                          "unaCount": 0, 
-                                          "rawCount": 0, 
-                                          "totCount": 0,
-                                          "name": name,
-                                          "rank": rank, 
-                                          "names": [], 
-                                          "geneNames": []
+                    if key not in created_taxa:
+                        created_taxa[key] = {
+                            "taxID": "",
+                            "children": [],
+                            "directChildren": [],
+                            "unaCount": 0,
+                            "rawCount": 0,
+                            "totCount": 0,
+                            "name": name,
+                            "rank": rank,
+                            "names": [],
+                            "geneNames": [],
                         }
-                        if e_value_enabled:
-                            created[taxon]["eValues"] = []
-                        if fasta_enabled:
-                            created[taxon]["fastaHeaders"] = []
-                    if inherited_unaCount > 0:
-                        created[taxon]["unaCount"] += inherited_unaCount
-                        created[taxon]["totCount"] += inherited_unaCount
-                        created[taxon]["geneNames"] += inherited_geneNames
-                        created[taxon]["names"] += [inherited_taxon] * inherited_unaCount
-                        if e_value_enabled:
-                            if not "eValues" in created[taxon]:
-                                created[taxon]["eValues"] = []
-                            created[taxon]["eValues"] += inherited_eValues
-                            inherited_eValues = []
-                        if fasta_enabled:
-                            if not "fastaHeaders" in created[taxon]:
-                                created[taxon]["fastaHeaders"] = []
-                            created[taxon]["fastaHeaders"] += inherited_fastaHeaders
-                            inherited_fastaHeaders = []
-                        inherited_taxon = ""
-                        inherited_geneNames = []
-                        inherited_unaCount = 0
-            else:
-                if j == len(ln) - 1:
-                    deleted[taxon] = raw_tax_set[taxon]
-                    inherited_taxon = taxon
-                    inherited_geneNames = raw_tax_set[taxon]["geneNames"]
-                    inherited_unaCount = raw_tax_set[taxon]["rawCount"]
-                    if e_value_enabled:
-                        inherited_eValues = raw_tax_set[taxon]["eValues"]
-                    if fasta_enabled:
-                        inherited_fastaHeaders = raw_tax_set[taxon]["fastaHeaders"]
-                    lns[i] = lns[i][:j]
-                else:
-                    lns[i] = lns[i][:j] + lns[i][(j+1):]
-    tax_set = {**created, **existent}
+                        if has_evalues:
+                            created_taxa[key]["eValues"] = []
+                        if has_fasta_headers:
+                            created_taxa[key]["fastaHeaders"] = []
 
-    return tax_set, lns
+                    if inherited_count > 0:
+                        created_taxa[key]["unaCount"] += inherited_count
+                        created_taxa[key]["totCount"] += inherited_count
+                        created_taxa[key]["geneNames"] += inherited_gene_names
+                        created_taxa[key]["names"] += [inherited_key] * inherited_count
+
+                        if has_evalues:
+                            created_taxa[key]["eValues"] += inherited_evalues
+                            inherited_evalues = []
+
+                        if has_fasta_headers:
+                            created_taxa[key]["fastaHeaders"] += inherited_fasta_headers
+                            inherited_fasta_headers = []
+
+                        inherited_key = ""
+                        inherited_gene_names = []
+                        inherited_count = 0
+
+            else:
+                # Filtered-out rank: prune it from the lineage and (if it's the leaf) inherit its data upward.
+                if j == len(lineage) - 1:
+                    # Leaf taxon at a disallowed rank → inherit its counts/metadata upward.
+                    dropped_taxa[key] = raw_taxa[key]
+                    inherited_key = key
+                    inherited_gene_names = raw_taxa[key]["geneNames"]
+                    inherited_count = raw_taxa[key]["rawCount"]
+
+                    if has_evalues:
+                        inherited_evalues = raw_taxa[key]["eValues"]
+                    if has_fasta_headers:
+                        inherited_fasta_headers = raw_taxa[key]["fastaHeaders"]
+
+                    # Remove leaf and everything after it (there is nothing after leaf, but keeps your old intent)
+                    filtered_lineages[i] = filtered_lineages[i][:j]
+                else:
+                    # Middle rank filtered out → remove just that element.
+                    filtered_lineages[i] = filtered_lineages[i][:j] + filtered_lineages[i][j + 1 :]
+
+    tax_set: TaxonSet = {**created_taxa, **existing_taxa}
+    return tax_set, filtered_lineages
