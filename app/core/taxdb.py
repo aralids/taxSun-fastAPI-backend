@@ -19,6 +19,7 @@ def init_taxdb() -> taxopy.TaxDb:
         )
 
     # Otherwise download and cache automatically
+    print("Local taxonomy DB not found. Downloading...")
     try:
         db = taxopy.TaxDb()
         print("Finished downloading.")
