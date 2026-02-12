@@ -24,6 +24,7 @@ def init_taxdb() -> taxopy.TaxDb:
 
     # taxopy stores downloaded files internally; optionally copy them:
     # (depends on taxopy version, sometimes not necessary)
+    print("Finished downloading.")
 
     return db
 
