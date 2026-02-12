@@ -9,10 +9,6 @@ async def process_tsv_dataset(file):
     lines = file_lines[1:]
     
     raw_tax_set, raw_lns, e_value_enabled, fasta_enabled = build_raw_taxon_index(header_line, lines)
-    id_lst = []
-    for obj in raw_tax_set.values():
-        if not (obj["taxID"] in id_lst):
-            id_lst += [obj["taxID"]]
     tax_set, lns = build_rank_filtered_taxon_set(raw_tax_set, raw_lns, e_value_enabled, fasta_enabled)
     lns = dedupe_and_sort_lineages(lns)
     tax_set = propagate_counts_and_build_children(lns, tax_set)
@@ -23,11 +19,13 @@ async def process_tsv_dataset(file):
 async def process_faa_dataset(file):
     file = await file.read()
     fasta_file = (file.decode("utf-8")[:-1]).split(">")
-    dict = {}
+    
+    seq_dict = {}
     for seq in fasta_file:
         seq2list = seq.split("\n")
         if len(seq2list) > 1:
             seq_name = seq2list[0]
             seq_body = seq2list[1].replace("*", "")
-            dict[seq_name] = seq_body
-    return {"faaObj": dict}
+            seq_dict[seq_name] = seq_body
+
+    return {"faaObj": seq_dict}
