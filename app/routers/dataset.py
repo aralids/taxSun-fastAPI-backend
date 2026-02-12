@@ -9,6 +9,7 @@ router = APIRouter()
 @router.post("/load_tsv_data")
 async def process_tsv(file: UploadFile = File(...)):
     t0 = time.time()
+    print("ENTER tsv endpoint")
     logger.info("load_tsv_data: ENTER")
     logger.info("load_tsv_data: filename=%s content_type=%s", file.filename, file.content_type)
     out = await process_tsv_dataset(file)
