@@ -1,33 +1,34 @@
 import taxopy
 from pathlib import Path
+from functools import lru_cache
 
 DATA_DIR = Path("data/taxonomy")
 NODES = DATA_DIR / "nodes.dmp"
 NAMES = DATA_DIR / "names.dmp"
 MERGED = DATA_DIR / "merged.dmp"
 
-def init_taxdb() -> taxopy.TaxDb:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    # If all required files exist → use local DB
-    if NODES.exists() and NAMES.exists() and MERGED.exists():
-        print("Using local taxonomy database.")
-        return taxopy.TaxDb(
-            nodes_dmp=str(NODES),
-            names_dmp=str(NAMES),
-            merged_dmp=str(MERGED),
+def _assert_taxdump_present() -> None:
+    missing = [p.name for p in (NODES, NAMES, MERGED) if not p.exists()]
+    if missing:
+        raise RuntimeError(
+            f"Missing taxonomy files in {DATA_DIR}: {missing}. "
+            "In production, these should be baked into the Docker image."
         )
 
-    # Otherwise download and cache automatically
-    print("Local taxonomy DB not found. Downloading...")
-    try:
-        db = taxopy.TaxDb()
-        print("Finished downloading.")
-        return db
-    except Exception as e:
-        print(f"Taxopy download/init failed: {repr(e)}")
-        raise
 
+@lru_cache(maxsize=1)
+def get_taxdb() -> taxopy.TaxDb:
+    """
+    Lazy, one-time initialization per process.
+    Safe for requests: the DB is created once and reused.
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _assert_taxdump_present()
 
-# Create singleton instance
-taxdb = init_taxdb()
+    print(f"Using local taxonomy database from {DATA_DIR}")
+    return taxopy.TaxDb(
+        nodes_dmp=str(NODES),
+        names_dmp=str(NAMES),
+        merged_dmp=str(MERGED),
+    )
