@@ -29,4 +29,4 @@ def init_taxdb() -> taxopy.TaxDb:
 
 
 # Create singleton instance
-taxdb = taxopy.TaxDb()
+taxdb = init_taxdb()
