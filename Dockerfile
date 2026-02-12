@@ -23,5 +23,5 @@ RUN mkdir -p /app/data/taxonomy \
 
 # Railway provides $PORT at runtime
 # IMPORTANT: adjust "app.main:app" to your real import path if needed
-CMD ["sh", "-c", "echo \"BOOT: PORT=$PORT\" && hypercorn app.main:app --bind 0.0.0.0:${PORT}"]
+CMD ["sh", "-c", "hypercorn app.main:app --bind 0.0.0.0:${PORT} --workers 2 --access-logfile - --error-logfile - --log-level info"]
 
