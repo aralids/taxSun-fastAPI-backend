@@ -19,14 +19,13 @@ def init_taxdb() -> taxopy.TaxDb:
         )
 
     # Otherwise download and cache automatically
-    print("Local taxonomy DB not found. Downloading...")
-    db = taxopy.TaxDb()
-
-    # taxopy stores downloaded files internally; optionally copy them:
-    # (depends on taxopy version, sometimes not necessary)
-    print("Finished downloading.")
-
-    return db
+    try:
+        db = taxopy.TaxDb()
+        print("Finished downloading.")
+        return db
+    except Exception as e:
+        print(f"Taxopy download/init failed: {repr(e)}")
+        raise
 
 
 # Create singleton instance
