@@ -1,8 +1,9 @@
 import copy, taxopy
 from app.core.config import rankPatternFull
-from app.core.taxdb import taxdb
+from app.core.taxdb import get_taxdb
 
 def calc_raw_tax_set(header_line, lines):
+    taxdb = get_taxdb()
     raw_tax_set = {"root root": {"taxID": "1", 
                                 "rawCount": 0, 
                                 "totCount": 0, 
